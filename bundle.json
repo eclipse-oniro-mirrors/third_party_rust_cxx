@@ -19,13 +19,22 @@
         "components": []
       },
       "build": {
-            "sub_component": [],
+            "sub_component": [
+              "//third_party/rust/crates/cxx:dylib",
+              "//third_party/rust/crates/cxx:cxx_rt"
+            ],
             "inner_kits": [
                 {
                     "name": "//third_party/rust/crates/cxx:cxx_cppdeps"
                 },
                 {
                     "name": "//third_party/rust/crates/cxx:lib"
+                },
+                {
+                    "name": "//third_party/rust/crates/cxx:dylib"
+                },
+                {
+                    "name": "//third_party/rust/crates/cxx:cxx_rt"
                 },
                 {
                     "name": "//third_party/rust/crates/cxx/macro:macro_lib"
