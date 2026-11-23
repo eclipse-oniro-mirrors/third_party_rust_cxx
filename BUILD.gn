@@ -31,8 +31,105 @@ ohos_cargo_crate("lib") {
   ]
   build_root = "build.rs"
   build_sources = [ "build.rs" ]
+
+  # rlib is a compile-time artifact: it must not be installed into the image.
+  # Without this, the module_info would point at a non-existent libcxx.z.so
+  # once the part is registered for installation (see bundle.json).
+  install_enable = false
+
   part_name = "rust_cxx"
   subsystem_name = "thirdparty"
+}
+
+# C++ side of the cxx runtime, intentionally free of any dependency on the
+# Rust cxx targets (unlike cxx_cppdeps below, whose deps pull in :lib).
+# Reusing cxx_cppdeps here would drag the rlib-instance of crate cxx into
+# the dependency closure of the dylib crate being compiled, i.e. crate cxx
+# referencing another instance of itself (flavor clash). As a dylib the
+# crate must link with -z defs, so cxxbridge1$std$* helpers (cxx.cc) have
+# to be defined inside libcxx.dylib.so itself; rlib targets have no such
+# constraint (undefined refs stay in the archive for final consumers).
+ohos_static_library("cxx_cc") {
+  part_name = "rust_cxx"
+  subsystem_name = "thirdparty"
+  defines = [ "RUST_CXX_NO_EXCEPTIONS" ]
+  public_configs = [ ":cxx_cppdeps_header_config" ]
+  sources = [
+    "//third_party/rust/crates/cxx/include/cxx.h",
+    "//third_party/rust/crates/cxx/src/cxx.cc",
+  ]
+  if (is_win) {
+    defines += [ "CXX_RS_EXPORT=__declspec(dllexport)" ]
+  } else {
+    defines += [ "CXX_RS_EXPORT=__attribute__((visibility(\"default\")))" ]
+  }
+}
+
+# Dynamic-library flavor of the cxx crate for Rust dylib consumers that
+# filter their exports with a version_script: the cxx runtime is resolved
+# from this dedicated DSO's dynsym instead of being bundled inside each
+# intermediate dylib. Does not affect the "lib" rlib target above.
+ohos_cargo_crate("dylib") {
+  crate_name = "cxx"
+  crate_type = "dylib"
+  crate_root = "src/lib.rs"
+
+  sources = [ "src/lib.rs" ]
+  edition = "2018"
+  cargo_pkg_version = "1.0.130"
+  cargo_pkg_authors = "David Tolnay <dtolnay@gmail.com>"
+  cargo_pkg_name = "cxx"
+  cargo_pkg_description = "Safe interop between Rust and C++"
+  deps = [
+    ":cxx_cc",
+    "//third_party/rust/crates/cxx/macro:macro_lib(${host_toolchain})",
+  ]
+  features = [
+    "alloc",
+    "std",
+  ]
+  build_root = "build.rs"
+  build_sources = [ "build.rs" ]
+
+  # Module metadata (install dest) must match the rust_dylib tool output
+  # (libcxx.dylib.so); the default shlib_extension (.z.so) does not.
+  module_output_extension = dylib_extension
+
+  # Restrict the export surface to the cxx ABI: cxxbridge1* (C++ side),
+  # *3cxx* (Rust-mangled cxx symbols needed by downstream Rust dylibs) and
+  # rust_metadata_cxx* (rustc metadata). Wildcards avoid the "symbol not
+  # defined" hard failure of literal enumeration.
+  version_script = "cxx_dylib.map"
+
+  # Distinct notice file name: the default (crate_name "cxx") collides with
+  # the "lib" rlib target in the same part.
+  notice_name = "cxx_dylib"
+
+  part_name = "rust_cxx"
+  subsystem_name = "thirdparty"
+}
+
+# cdylib bundling the cxx runtime (rlib "lib" target) and exporting the
+# cxxbridge1$* symbols from its dynsym, so C++ hosts that no longer get
+# these symbols from a switched-to-dylib Rust dependency can resolve them
+# at link (-z defs) and run time (DT_NEEDED), same pattern as graphic's
+# particle_cxx_rust.z.so.
+ohos_rust_shared_ffi("cxx_rt") {
+  sanitize = {
+    cfi = true
+    cfi_cross_dso = true
+    debug = false
+  }
+
+  crate_name = "cxx_rt"
+  crate_root = "src/cxx_rt.rs"
+  sources = [ "src/cxx_rt.rs" ]
+  edition = "2018"
+  deps = [ ":lib" ]
+  version_script = "cxx_rt.map"
+
+  subsystem_name = "thirdparty"
+  part_name = "rust_cxx"
 }
 
 config("cxx_cppdeps_header_config") {
